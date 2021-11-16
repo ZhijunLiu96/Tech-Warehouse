@@ -20,7 +20,7 @@
 **运行生产应用程序**
 
 - spark-submit + YARN/Mesos/Standalone + jar包
-    ```shell
+    ```
     ./bin/spark-submit \
     --class org.apache.spark.examples.SparkPi \
     --master local \
@@ -31,14 +31,14 @@
 
 **结构化流处理**
 
-    ```shell
-    val streamingDataFrame = spark.readStream
-    .schema(staticSchema)
-    .option("maxFilesPerTrigger", 1)
-    .format("csv")
-    .option("header", "true")
-    .load("/data/retail-data/by-day/*.csv")
-    ```
+```shell
+val streamingDataFrame = spark.readStream
+.schema(staticSchema)
+.option("maxFilesPerTrigger", 1)
+.format("csv")
+.option("header", "true")
+.load("/data/retail-data/by-day/*.csv")
+```
 
 **机器学习和高级数据分析**
 
@@ -1013,12 +1013,212 @@ df.write.option(“maxRecordsPerFile”，5000）
 
 ## 第十一章 DataSet
 
+**使用场景**
+- 当你要执行的操作无法使用DataFrame操作表示时
+- 如果需要类型安全，并且愿意牺牲一定性能来实现它。
 
+最流行的应用场景可能是先用DataFrame和再用Dataset的情况，这可以手动在性能和 类型安全之间进行权衡。这在有些情况时是很有用的，比如当基于DataFrame执行的 提取、转换和加载 (ETL) 转换作业之后，想将数据送入驱动器并使用单机库操作时， 或者是当需要在Spark SQL 中执行过滤和进一步操作之前，进行每行分析的预处理转 换操作的时候。
+
+```java
+import org.apache.spark.sql.Encoders;
+public class Flight implements Serializable{ 
+    String DEST_COUNTRY_NAME;
+    String ORIGIN_COUNTRY_NAME;
+    Long DEST_COUNTRY_NAME;
+}
+
+Dataset<Flight> flights = spark.read
+    .parquet("/data/flight-data/parquet/2010-summary.parquet/")
+    .as(Encoders.bean(Flight.class));
+```
+
+```scala
+case class Flight(DEST_COUNTRY_NAME: String, ORIGIN_COUNTRY_NAME: String, count: BigInt)
+
+val flightsDF = spark.read .parquet("/data/flight-data/parquet/2010-summary.parquet/")
+val flights = flightsDF.as[Flight]
+```
+
+**DataSet操作**
+- 动作操作
+- 转换操作
+    - 过滤：定义一个普通函数返回boolean即可
+    ```scala
+    flights.collect().filter(flight_row => originIsDestination(flight_row))
+    ```
+    - 映射
+    ```scala
+    val destinations = flights.map(f => f.DEST_COUNTRY_NAME)
+    val localDestinations = destinations.take(5)
+    ```
+- 连接 ```join with``` (用```join```会变回dataframe，丢失JVM类型信息，但可join dataframe和dataset)
+```scala
+val flights2 = flights.joinWith(flightsMeta, flights.col("count") === flightsMeta.col("count"))
+
+flights2.selectExpr("_1.DEST_COUNTRY_NAME")
+flights2.take(2)
+// Array[(Flight, FlightMetadata)] = Array((Flight(United States,Romania,1),...
+```
+- 分组和聚合
+    - 分组(grouping)和聚合(aggregation)基本上和我们在之前的聚合章节中了解的聚合操作差不多，因此groupBy rollup和cube仍可用
+    - 但它们返回 DataFrame而不是 Dataset(丢失类型信息)
 
 ## 第十二章 弹性分布式数据集
 
+**低级 API**
+- 用于处理分布式数据(RDD)
+- 用于分发和处理分布式共享变量(广播变量和累加器)
+
+**何时使用低级 API**
+- 当在高级API中找不到所需的功能时，例如要对集群中数据的物理放置进行非常严格的控制时。
+- 当需要维护一些使用RDD编写的遗留代码库时
+- 当需要执行一些自定义共享变量操作时
+
+**低级 API 使用**
+
+SparkContext是低级API函数库的入口，可以通过SparkSession来获取SparkContext， SparkSession是用于在Spark集群上执行计算的工具。
+
+```scala
+Spark.sparkContext
+```
+
+**RDD**：RDD是一个只读不可变的且已分块的记录集合，并可以被并行处理。RDD 与 DataFrame不同，DataFrame中每个记录即是一个结构化的数据行，各字段已知且 schema 已知，而 RDD 中的记录仅仅是程序员选择的Java、Scala 或 Python 对象。
+- 数据分片(Partition)列表
+- 作用在每个数据分片的计算函数
+- 描述与其他RDD的依赖关系列表
+- (可选)为 key-value RDD配置的 Partitioner (分片方法，如hash分片)
+- (可选)优先位置列表，根据数据的本地特性，指定了每个 Partition 分片的处理位 置偏好(例如，对于一个 HDFS 文件来说，这个列表就是每个文件块所在的节点)
+
+**何时使用 RDD**
+
+一般来说，除非有非常非常明确的理由，否则不要手动创建 RDD。它们是很低级的 API，虽然它提供了大量的功能，但同时缺少结构化 API 中可用的许多优化。在绝大 多数情况下，DataFrame 比 RDD 更高效、更稳定并且具有更强的表达能力。当你需要对数据的物理分布进行细粒度控制(自定义数据分区)时，可能才需要使用 RDD。
+
+**RDD 操作**
+- 创建
+```scala
+// 由 DataSet 和 DataFrame 转换得到
+spark.range(500).rdd // Dataset[Long] -> RDD[Long]
+df.rdd
+
+// 从本地集合中创建 （2个数据分片）
+val myCollection = "Spark The Definitive Guide : Big Data Processing Made Simple" .split(" ")
+val words = spark.sparkContext.parallelize(myCollection, 2)
+
+// 从数据源创建
+spark.sparkContext.wholeTextFiles("/some/path/withTextFiles")
+```
+- 转换操作
+    - distinct
+    ```scala
+    words.distinct().count()
+    ```
+    - filter
+    ```scala
+    def startsWithS(individual:String) = { 
+        individual.startsWith("S")
+    }
+    words.filter(word => startsWithS(word)).collect()
+    ```
+    - map
+    ```scala
+    val words2 = words.map(word => (word, word(0), word.startsWith("S")))
+    ```
+    - flatMap
+    ```scala
+    words.flatMap(word => word.toSeq).take(5)
+    // S， P， A， R，K
+    ```
+    - 排序
+    ```scala
+    words.sortBy(word => word.length() * -1).take(2)
+    ```
+- 随即分割
+```scala
+// weight数组内weight权重值的加和应为1
+val fiftyFiftySplit = words.randomSplit(Array[Double](0.5, 0.5))
+```
+- 动作操作
+    - reduce
+    ```scala
+    spark.sparkContext.parallelize(1 to 20).reduce(_ + _) // 210
+    ```
+    - count 
+    ```scala
+    words.count()
+    // 大约个数
+    val confidence = 0.95
+    val timeoutMilliseconds = 400 words.countApprox(timeoutMilliseconds, confidence)
+    // 去重后的大约个数
+    words.countApproxDistinct(0.05)
+    // 只有在总行数较少或不同 Key 数量较少 的情况下，才适合使用此方法
+    words.countByValue()
+    words.countByValueApprox(1000，0.95)
+    ```
+    - first: 返回数据集中的第一个值
+    ```scala
+    words.first()
+    ```
+    - max和min: 
+    ```scala
+    spark.sparkContext.parallelize(1 to 20).max()
+    spark.sparkContext.parallelize(1 to 20).min()
+    ```
+    - take
+    ```scala
+    words.take(5)
+    words.takeOrdered(5)
+    words.top(5)
+    // takeSample函数用 于从RDD中获取指定大小的随机样本，并可以指定withReplacement(采样过程是否 允许替换)、返回样本数量和随机数种子这3个参数
+    val withReplacement = true 
+    val numberToTake = 6
+    val randomSeed = 100L
+    words.takeSample(withReplacement, numberToTake, randomSeed)
+    ```
+- 保存文件
+    - saveAsTextFile: 要将RDD保存到文本文件中，只需指定文件路径和压缩编码器(可选参数)即可
+    ```scala
+    import org.apache.hadoop.io.compress.BZip2Codec
+    words.saveAsTextFile("file:/tmp/bookTitleCompressed", classOf [BZip2Codec])
+    ```
+    - SequenceFiles
+    ```scala
+    words.saveAsObjectFile("/tmp/my/sequenceFilePath")
+    ```
+    - Hadoop文件
+- 缓存: 可以通过org.spache.spark.storage.StorageLevel来指定单例对象的任意存储级 别，存储级别包括仅内存(memory only)、仅磁盘(disk only)、堆外内存(off heap)
+- 检查点: 检查点是将RDD保存到磁盘上的操作，以便将来对此 RDD 的引用能直接访问磁盘上的那些中间结果，而不需要从其源头重新计算 RDD
+```scala
+spark.sparkContext.setCheckpointDir("/some/path/for/checkpointing") 
+words.checkpoint()
+```
+- 通过pipe方法调用系统命令操作
+    - mapPartitions: mapPartitions函数每次处理一个数据分区
+    ```scala
+    // 为数据中的每个分区创建值“1”
+    words.mapPartitions(part => Iterator[Int](1)).sum()
+    ```
+    - foreachPartition: foreachPartition 函数仅用于迭代所有的数据分区，与mapPartitions 的不同在于它没有返回值，这使得它非常适合像写入数据库这样的操作(不需要返回计算结果)
+    ```scala
+    words.foreachPartition { iter =>
+        import java.io._
+        import scala.util.Random
+        val randomFileName = new Random().nextInt()
+        val pw = new PrintWriter(new File(s"/tmp/random-file-{randomFileName}.txt")) 
+        while (iter.hasNext) {
+            pw.write(iter.next()) 
+        }
+        pw.close()
+    }
+    ```
+    - glom: 当需要将数据收集到驱动器并想为每个分区创建一个数组时
+    ```scala
+    spark.sparkContext.parallelize(Seq("Hello", "World"), 2).glom().collect()
+    // 结果是Array(Array(Hello), Array(World))
+    ```
+
 
 ## 第十三章 高级RDD
+
 
 
 ## 第十四章 分布式共享变量
