@@ -7,7 +7,8 @@
 ### :cupid: Algorithm
 
 - Searching Algorithm
-    - [BFS-DFS](BFS-DFS.md)
+    - [BFS-DFS](ALGO_BFS-DFS.md)
+    - [Sort](ALGO_Sort.md)
 - Tree Structure
 
 ### :cupid: Data Engineering
@@ -17,7 +18,7 @@
 |cdh deployment        |:point_right:|[check it here](cdh-deployment.md)     |
 |Hive                  |:point_right:|[check it here](hive/hive.md)          |
 |HBase                 |:point_right:|[check it here](hbase/Notes/HBase.pdf) |
-|Spark                 |:point_right:|[to be implemented]()                  |
+|Spark                 |:point_right:|[chech it here](spark.md)              |
 |Interaction with Scala|:point_right:|[to be implemented]()                  |
 |Scoop                 |:point_right:|[to be implemented]()                  |
 |Flink                 |:point_right:|[to be implemented]()                  |
