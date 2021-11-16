@@ -6,10 +6,15 @@
 
 ### :cupid: Algorithm
 
-- Searching Algorithm
-    - [BFS-DFS](ALGO_BFS-DFS.md)
+- Algorithm
     - [Sort](ALGO_Sort.md)
-- Tree Structure
+    - [Search](ALGO_Search.md)
+    - [BFS-DFS](ALGO_BFS-DFS.md)
+    - Dynamic Programming
+    - Greedy Algorithm
+    - Graph Algorithm
+    - Flow Network
+- Data Structure
 
 ### :cupid: Data Engineering
 
@@ -19,7 +24,6 @@
 |Hive                  |:point_right:|[check it here](hive/hive.md)          |
 |HBase                 |:point_right:|[check it here](hbase/Notes/HBase.pdf) |
 |Spark                 |:point_right:|[chech it here](spark.md)              |
-|Interaction with Scala|:point_right:|[to be implemented]()                  |
 |Scoop                 |:point_right:|[to be implemented]()                  |
 |Flink                 |:point_right:|[to be implemented]()                  |
 
