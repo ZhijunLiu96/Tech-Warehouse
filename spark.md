@@ -1219,6 +1219,45 @@ words.checkpoint()
 
 ## 第十三章 高级RDD
 
+- Key-Value 基础
+    - map
+    - keyBy
+    - valueBy: 如果我们有一个元组，Spark 将假设第一个元素是 key，第二个是 value，并指修改 value
+    - 提取key和value
+    ```scala
+    keyword.keys.collect()
+    keyword.values.collect()
+    ```
+    - lookup
+    ```scala
+    keyword.lookup("s")
+    ```
+    - sampleByKey: 根据给定键值对数据集部分采样
+    ```scala
+    val distinctChars = words.flatMap(word => word.toLowerCase.toSeq)
+        .distinct.collect()
+    import scala.util.Random
+    val sampleMap = distinctChars.map(c => (c, new Random().nextDouble())).toMap words.map(word => (word.toLowerCase.toSeq(0), word))
+        .sampleByKey(true, sampleMap, 6L)
+        .collect()
+    ```
+- 聚合操作
+- CoGroups
+- 连接操作
+    - coalesce：coalesce有效地折叠(collapse)同一工作节点上的分区，以便在重新分区时避免数 据洗牌(shuffle)
+    - repartition：repartition操作将对数据进行重新分区，跨节点的分区会执行shuffle操作。对于map 和filter操作，增加分区可以提高并行度
+    - repartitionAndSortWithinPartitions
+    - 自定义分区
+    ```scala
+    import org.apache.spark.HashPartitioner
+    rdd.map(r => r(6)).take(5).foreach(println)
+    val keyedRDD = rdd.keyBy(row => row(6).asInstanceOf[Int].toDouble)
+    keyedRDD.partitionBy(new HashPartitioner(10)).take(10)
+    ```
+    - 
+- 控制分区
+
+- 自定义序列化
 
 
 ## 第十四章 分布式共享变量
@@ -1250,6 +1289,7 @@ words.checkpoint()
 
 ## 第二十三章 生产中的结构化流处理
 
+---
 
 ## 第二十四章 高级分析和机器学习概览
 
