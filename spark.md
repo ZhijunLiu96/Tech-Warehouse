@@ -1244,6 +1244,13 @@ words.checkpoint()
 - 聚合操作
 - CoGroups
 - 连接操作
+    - 内连接
+    - 全外连接(fullOuterJoin)
+    - 左外连接(leftOuterJoin)
+    - 右外连接(rightOuterJoin)
+    - 笛卡尔连接(cartesian)
+    - zip
+- 控制分区
     - coalesce：coalesce有效地折叠(collapse)同一工作节点上的分区，以便在重新分区时避免数 据洗牌(shuffle)
     - repartition：repartition操作将对数据进行重新分区，跨节点的分区会执行shuffle操作。对于map 和filter操作，增加分区可以提高并行度
     - repartitionAndSortWithinPartitions
@@ -1254,20 +1261,271 @@ words.checkpoint()
     val keyedRDD = rdd.keyBy(row => row(6).asInstanceOf[Int].toDouble)
     keyedRDD.partitionBy(new HashPartitioner(10)).take(10)
     ```
-    - 
-- 控制分区
+- 自定义序列化：Kryo 序列化问题，任何你希望并行处理(或函数操作)的对象都必须是可序列化的
+```scala
+class SomeClass extends Serializable {
+    var someValue = 0
+    def setSomeValue(i:Int) = {
+        someValue = i
+        this 
+    }
+}
+sc.parallelize(1 to 10).map(num => new SomeClass().setSomeValue(num))
+```
 
-- 自定义序列化
+默认序列化的方式可能很慢，Spark可以使用 Kryo 库 (第2版) 更快地序列化对象。 Kryo 序列化的速度比 Java 序列化更快，压缩也更紧凑 (通常是 10倍)，但并不是支持 所有序列化类型的，并且要求你先注册在程序中使用的类
 
+```scala
+val conf = new SparkConf().setMaster(...).setAppName(...)
+conf.registerKryoClasses(Array(classOf[MyClass1]，classOf[MyClass2])) 
+val sc = new SparkContext(conf)
+```
 
 ## 第十四章 分布式共享变量
 
+**广播变量**
+
+在驱动节点上使用变量的一般方法是简单地在函数闭包(function closure)中 引用它(例如，在map操作中)，但这种方式效率很低，尤其是对于大数据变量来说 (如 数据库表或机器学习模型)。原因在于，当在闭包(closure)中使用变量时，必须在 工作节点上执行多次反序列化 (每个任务一次)
+
+广播变量是共享的、不可修改的变量，它们缓存在 集群中的每个节点上，而不是在每个任务中都反复序列化。一个典型的应用场景是把 一个大型查找表作为广播变量传递，它适合于执行器(executor)的内存并在函数中使用。既可以在RDD中使用广播变量，也可以是在UDF或Dataset中使 用广播变量，都将获得相同的结果.
+
+<img src="figure/spark/broadcast.png">
+
+```scala
+val supplementalData = Map("Spark" -> 1000, "Definitive" -> 200, 
+                           "Big" -> -300, "Simple" -> 100)
+val suppBroadcast = spark.sparkContext.broadcast(supplementalData)
+// 我们通过value方法引用此广播变量的值。该方法在序列化函数中是可访问的，无需对数据进行序列化。这可以节省大量的序列化和反序列化的成本
+suppBroadcast.value
+words.map(word => (word, suppBroadcast.value.getOrElse(word, 0))) 
+    .sortBy(wordPair => wordPair._2)
+    .collect()
+```
+
+**累加器**
+
+<img src="figure/spark/accumulator.png">
+
+```scala
+case class Flight(DEST_COUNTRY_NAME: String, 
+                  ORIGIN_COUNTRY_NAME: String, count: BigInt)
+val flights = spark.read.parquet("/data/flight-data/parquet/2010-summary.parquet").as[Flight]
+
+import org.apache.spark.util.LongAccumulator
+val accUnnamed = new LongAccumulator
+val acc = spark.sparkContext.register(accUnnamed)
+// 命名累加器将显示在 Spark 用户界面 (Spark UI)中，而未命名的累加器不会。
+val accChina = new LongAccumulator
+val accChina2 = spark.sparkContext.longAccumulator("China") 
+spark.sparkContext.register(accChina，"China")
+```
+
+```scala
+def accChinaFunc(flight_row: Flight) = {
+    val destination = flight_row.DEST_COUNTRY_NAME 
+    val origin = flight_row.ORIGIN_COUNTRY_NAME
+    if (destination == "China") {
+        accChina.add(flight_row.count.toLong) 
+    }
+    if (origin == "China") { 
+        accChina.add(flight_row.count.toLong)
+    } 
+}
+
+flights.foreach(flight_row => accChinaFunc(flight_row))
+```
+
+自定义累加器
+
+```scala
+import scala.collection.mutable.ArrayBuffer 
+import org.apache.spark.util.AccumulatorV2
+
+val arr = ArrayBuffer[BigInt]()
+
+class EvenAccumulator extends AccumulatorV2[BigInt, BigInt] { 
+    private var num:BigInt = 0
+    def reset(): Unit = {
+        this.num = 0 
+    }
+    def add(intValue: BigInt): Unit = { 
+        if (intValue % 2 == 0) {
+            this.num += intValue
+        }
+    }
+    def merge(other: AccumulatorV2[BigInt,BigInt]): Unit = {
+        this.num += other.value
+    }
+    def value():BigInt = { 
+        this.num
+    }
+    def copy(): AccumulatorV2[BigInt,BigInt] = {
+        new EvenAccumulator 
+    }
+    def isZero():Boolean = { 
+        this.num == 0
+    } 
+}
+
+val acc = new EvenAccumulator
+val newAcc = sc.register(acc, "evenAcc")
+
+// 结果
+acc.value // 0
+flights.foreach(flight_row => acc.add(flight_row.count)) 
+acc.value // 31390
+```
+
+---
 
 ## 第十五章 Spark如何在集群上运行
 
 
+
+**组成**
+- Spark 驱动器
+    - 它只是一个物理机器上的一个进 程，负责维护群集上运行的应用程序的状态
+    - 它必须与集群管理器交互才能获得物理资源并启动执行器
+- Spark 执行器
+    - 完成驱动器分配的任务，运行它们，并报告其状态(成功或失败)和 执行结果。每个Spark应用程序都有自己的执行器进程
+- 集群管理器
+    - Spark 驱动器和执行器并不是孤立存在的，集群管理器会将他们联系起来，集群管理器负责维护一组运行 Spark 应用程序的机器。
+    - 集群管理器管理的是物理机器，而不是进程
+    <img src="figure/spark/structure.png">
+    - Spark支持的集群管理器:一个简单的内置独立集群管理器，Apache Mesos和 Hadoop YARN
+
+**执行模式**
+- 集群模式
+<img src="figure/spark/cluster.png">
+- 客户端模式
+    - 客户端模式与集群模式几乎相同，只是 Spark 驱动器保留在提交应用程序的客户端机器上。
+    - 这些机器通常被称为网关机器(gateway machines)或边缘节点(edge nodes)
+<img src="figure/spark/client.png">
+- 本地模式
+    - 它在一台机器上运行整个 Spark 应用程序。它通过单机上的线程实现并行性
+
+**Spark应用程序的生命周期(Spark 外部)**
+- 客户请求
+<img src="figure/spark/request.png">
+- 启动
+    - 红线：SparkSession 与集群管理器驱动节点通信
+    - 黄线：集群管理器随后在集群工作节点上启动执行器
+<img src="figure/spark/launch.png">
+- 执行：集群的驱动节点和工作节点相互通信、执行代码、和移动数据，驱动节点将任务安排到每个工作节点上，每个工作节点回应给驱动节点这些任务的执行状态，也可能回复启动成功或启动失败等
+<img src="figure/spark/excu.png">
+- 完成：Spark 应用程序完成后，Spark 驱动器会以成功或失败的状态退出
+<img src="figure/spark/exit.png">
+
+**Spark应用程序的生命周期(Spark 内部)**
+- SparkSession
+```scala
+import org.apache.spark.sql.SparkSession
+val spark = SparkSession.builder().appName("Databricks Spark Example")
+                        .config("spark.sql.warehouse.dir", "/user/hive/warehouse")
+                        .getOrCreate()
+```
+- Spark Context
+    - SparkSession中的SparkContext对象代表与Spark集群的连接，可以通过它与一些Spark 的低级API(如RDD)进行通信，在较早的示例和文档中，它通常以变量名sc存储。通过SparkContext，你可以创建RDD、累加器和广播变量，并且可以在集群上运行代码
+```scala
+import org.apache.spark.SparkContext 
+val sc = SparkContext.getOrCreate()
+```
+- 逻辑指令: 逻辑指令到物理执行
+- Spark作业：每个stage有多少task
+- 阶段：可以一起执行的任务组
+- 任务：Spark 中的阶段由若干任务(task)组成，每个任务都对应于一组数据和一组将在单个执行器上运行的转换操作。如果数据集中只有一个大分区，我们将只有1个任务;如果有1000个小分区，我们将有1000个可以并行执行的任务。
+
+
+**执行细节**
+- 流水线执行
+    - Spark 在将数据写入内存或磁盘之前执行尽可能多的操作
+- shuffle 数据持久化
+    - 将shuffle文件持久 化到磁盘上允许 Spark 稍晚些执行 reduce 阶段的某些任务(例如，如果没有足够多的 执行器同时执行分配任务，由于数据已经持久化到磁盘上，便可以稍晚些执行某些任务)，另外在错误发生时，也允许计算引擎仅重新执行 reduce任务而不必重新启动所 有的输入任务。
+    - shuffle操作数据持久化有一个附带作用，在已经执行了shuffle操作的数据上运行新的作业并不会重新运行shuffle操作的“源”一侧的任务。在Spark UI和日志中，你将 看到标记为“skipped”的预shuffle阶段
+    - 你也可以使用 DataFrame 或 RDD 的 cache 方法自己设置缓存，这样你可以精确控制哪些数据需要保存
+
+
+
 ## 第十六章 开发Spark应用程序
 
+**编写Spark应用程序**
+- sbt+Scala
+- maven+Java
+- python
+```shell
+SPARK_HOME/bin/spark-submit \
+--class com.databricks.example.SimpleExample \ 
+--master local \ 
+target/spark-example-0.1-SNAPSHOT.jar "hello"
+
+SPARK_HOME/bin/spark-submit --master local pyspark_template/main.py
+```
+
+**测试Spark应用程序**
+- 战略原则
+    - 对输入数据的适应性
+    - 对业务逻辑的适应性和演变
+    - 对输出模式和原子性的适应性
+- 战术指导
+    - 管理SparkSessions：只需将SparkSession初始化一次，然后在运行时将其传递给相关的函数和类，以便在测试期间可以轻易替换，这使得在单元测试中使用SparkSession哑元对象 测试每个单独的函数变得更加容易。
+    - 使用哪种API：SQL、DataFrame和Dataset？
+    - 连接到单元测试框架
+    - 连接到数据源：避免测试代码连接到实际生产数据源。实现此目的的一个简单方法是让所 有业务逻辑功能的输入都为DataFrame或Dataset，而不是直接连接到数据源
+- 开发过程
+    - 启动应用程序
+    ```shell
+    ./bin/spark-submit \
+    --class <main-class> \ 
+    --master <master-url> \ 
+    --deploy-mode <deploy-mode> \ 
+    --conf <key>=<value> \
+    ... # other options 
+    <application-jar-or-script> \ 
+    [application-arguments]
+    ```
+
+**Spark-submit 命令选项**
+
+|Parameter|Description|
+|---------|-----------|
+|--master MASTER_URL|指定master节点URL，例如spark://host:port，mesos://host:port，yarn，or local|
+|--deploy-mode DEPLOY _MODE|配置是在本地以客户端模式 (“client”) 还是在一台集群中节 点上以集群模式(“cluster”)运行应用程序 (默认使用客户端模式)|
+|--class CLASS_NAME|配置应用程序的入口类 (main函数所在的类，适合 Java / Scala 应用)|
+|--name NAME|配置应用程序的名字|
+|--jars JARS|配置驱动器或者执行器路径上包括的本地jar包，用逗号隔开|
+|--packages|配置驱动器或者执行器路径上包括的Maven依赖包，用逗号 隔开。将会首先搜索本地Maven版本库(repo)，然后搜索 Maven Central及远程版本库(远程repo通过--repositories选项 指定)。依赖软件包的格式是groupId:artifactId:version|
+|--exclude-packages|为了避免依赖冲突，配置排除在--packages选项中指定的依赖包，通过逗号隔开，格式是:artifactId|
+|--repositories|配置除了通过--packages指定的，其他的Maven远程依赖库， 通过逗号隔开|
+|--py-files PY_FILES|配置Python应用程序需要的.zip、.egg或者.py文件(即放在 PYTHONPATH路径上的文件)，用逗号隔开|
+|--files FILES|配置在每个执行器工作目录路径下的文件，用逗号隔开|
+|--conf PROP=VALUE|配置Spark属性|
+|--properties-file FILE|配置需要从哪个文件加载额外的属性，默认是conf/spark- defaults.conf|
+|--driver-memory MEM|配置驱动器的内存大小(例如，1000MB，2GB)(默认: 1024MB)|
+|--driver-python-options|配置驱动器的Java参数|
+|--driver-library-path|配置驱动器的library path|
+|--driver-class-path|配置驱动器的classpath。注意，通过—jars添加的JAR包已经自动包含在classpath里了|
+|--executor-memoryMEM|配置执行器的内存大小(例如，1000MB，2GB)(默认: 1024MB)|
+|--proxy-user NAME|配置提交应用程序时的代理用户，在配置了--principal/--keytab 选项时，这个配置不生效|
+|--help，-h|显示帮助信息并退出|
+|--verbose，-v|打印额外的debug信息|
+|--version|打印Spark版本号|
+
+**部署相关配置**
+
+|Cluster Manager|Modes|Conf|Description|
+|---------------|-----|----|-----------|
+|Standalone      |Cluster|--driver-cores NUM|驱动器的核心数量(默认:1)|
+|Standalone/Mesos|Cluster|--supervise|失败后重新启动驱动器|
+|Standalone/Mesos|Cluster|--kill SUBMISSION_ID|杀掉指定驱动器进程|
+|Standalone/Mesos|Cluster|--status SUBMISSION_ID|获取指定驱动器的状态|
+|Standalone/Mesos|Either |--total-executor-cores NUM|所有执行器的总核心数|
+|Standalone/YARN |Either |--executor-cores NUM|每个执行器的核心数(默认: YARN 模式下为1，或在 standalone模式下worker节点的 所有可用核心数)|
+|YARN|Either|--driver-cores NUM|集群模式下的驱动器的核心数 (默认:1)|
+|YARN|Either|queue QUEUE_NAME|提交到YARN的队列名(默认:“default”)|
+|YARN|Either|--num-executors NUM|启动的执行器(默认:2)。如 果配置了动态分配，那么初始 的执行器数量最少为NUM|
+|YARN|Either|--archives ARCHIVES|需要提取到每个执行器工作目 录下的archive，用逗号分隔|
+|YARN|Either|--principal PRINCIPAL|当运行安全HDFS时，登录到 KDC用到的原则|
+|YARN|Either|--keytab KEYTAB|包含上面指定principal 的 keytab的完整路径，keytab将 会通过Distributed Cache被复制 到执行应用程序的master节点 上，为定期更新登录口令使用|
 
 ## 第十七章 部署Spark
 
