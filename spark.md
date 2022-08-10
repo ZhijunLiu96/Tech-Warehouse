@@ -847,8 +847,10 @@ person.join(gradProgram3，joinExpr).show()
 - 通信策略（all-to-all shuffle join, broadcast join）
     - 大表与大表连接：执行shuffle join则每个节点都与所有其他节点进行通信，并根据哪个节点具有（你正在用于连接的）某个键或某一组键来共享数据
     <img src="figure/spark/bigbig.png">
+
     - 大表与小表连接：把数据量较小的DataFrame复制到集群中的所有工作节点上
     <img src="figure/spark/bigsmall.png">
+
     - 小表与小表连接：当执行小表的连接时，通常最好让Spark决定如何连接它们。如果你注意到奇怪的行为，你可以随时强制执行广播连接。
 
 ## 第九章 数据源
@@ -1392,27 +1394,33 @@ acc.value // 31390
     - Spark 驱动器和执行器并不是孤立存在的，集群管理器会将他们联系起来，集群管理器负责维护一组运行 Spark 应用程序的机器。
     - 集群管理器管理的是物理机器，而不是进程
     <img src="figure/spark/structure.png">
+
     - Spark支持的集群管理器:一个简单的内置独立集群管理器，Apache Mesos和 Hadoop YARN
 
 **执行模式**
 - 集群模式
 <img src="figure/spark/cluster.png">
+
 - 客户端模式
     - 客户端模式与集群模式几乎相同，只是 Spark 驱动器保留在提交应用程序的客户端机器上。
     - 这些机器通常被称为网关机器(gateway machines)或边缘节点(edge nodes)
 <img src="figure/spark/client.png">
+
 - 本地模式
     - 它在一台机器上运行整个 Spark 应用程序。它通过单机上的线程实现并行性
 
 **Spark应用程序的生命周期(Spark 外部)**
 - 客户请求
 <img src="figure/spark/request.png">
+
 - 启动
     - 红线：SparkSession 与集群管理器驱动节点通信
     - 黄线：集群管理器随后在集群工作节点上启动执行器
 <img src="figure/spark/launch.png">
+
 - 执行：集群的驱动节点和工作节点相互通信、执行代码、和移动数据，驱动节点将任务安排到每个工作节点上，每个工作节点回应给驱动节点这些任务的执行状态，也可能回复启动成功或启动失败等
 <img src="figure/spark/excu.png">
+
 - 完成：Spark 应用程序完成后，Spark 驱动器会以成功或失败的状态退出
 <img src="figure/spark/exit.png">
 
@@ -1527,16 +1535,79 @@ SPARK_HOME/bin/spark-submit --master local pyspark_template/main.py
 |YARN|Either|--principal PRINCIPAL|当运行安全HDFS时，登录到 KDC用到的原则|
 |YARN|Either|--keytab KEYTAB|包含上面指定principal 的 keytab的完整路径，keytab将 会通过Distributed Cache被复制 到执行应用程序的master节点 上，为定期更新登录口令使用|
 
+**spark configuration** 
+https://spark.apache.org/docs/2.3.0/configuration.html
+
 ## 第十七章 部署Spark
 
 
 ## 第十八章 监控与调试
 
+**监控级别**
+- Spark应用程序和作业
+- JVM
+- 操作系统/主机
+- 集群
+
+**监视什么**
+- 驱动器和执行器进程
+```
+$SPARK_HOME/conf/metrics.properties
+改spark.metrics.conf配置属性来自定义配置文件位置
+```
+- 查询，作业，阶段和任务: 通过 Spark 日志和 Spark UI
+- Spark日志
+```scala
+// 更改日志级别
+spark.sparkContext.setLogLevel("INFO")
+```
+- Spark UI：默认（http://localhost:4040）
+- Spark REST API (http://localhost:4040/api/v1)
+- Spark UI历史记录服务器
+
+**常出现的Spark问题**
+
+略
 
 ## 第十九章 性能调优
 
+略
 
 ## 第二十章 流处理基础
+
+**什么是流处理**
+
+流处理是连续处理新到来的数据以更新计算结果的行为
+
+**流处理的应用场景**
+- 通知和警报
+- 实时报告
+- 增量ETL
+- 实时数据更新来提供实时服务
+- 实时决策
+- 在线机器学习
+
+**流处理的优点**
+- 首先，流处理可以降低延迟时间:当你的应用程序需要快速响应 时间(在分钟、秒或毫秒级别上)，你需要一个可以将状态保存在内存中的流处理系统，以获得更好的性能，我们介绍的许多决策和警报案例都属于这种情况。
+- 其次，流处理在更新结果方面也比重复的批处理作业更有效，因为它会自动增量计算。
+
+**流处理的挑战**
+- 基于应用程序时间戳(也称为事件时间) 处理无序数据
+- 维持大量的状态
+- 支持高吞吐量
+- 即使有机器故障也仅需对事件进行一次处理
+- 处理负载不平衡和拖延者(straggler)
+- 快速响应时间
+- 与其他存储系统中的数据连接
+- 确定在新事件到达时如何更新输出
+- 事务性地向输出系统写入数据
+- 在运行时更新应用程序的业务逻辑
+
+**流处理设计要点**
+- 记录级别API与声明式API
+    - 使用记录级别 API，用户需要负责在较长时间段内跟踪状态，在一段时间后删除它以清除空间，并在发生故障后以不同方式响应重复事件
+    - 声明式 API，应用程序为了响应每个新事 件指定要计算的内容，而不是如何计算，也不需要考虑如何从失败中恢复。API自动跟踪每个操作处理的数据量，可靠地保存相关状态， 并在需要时从失败中恢复计算，诸如 Google DataFlow和 Apache Kafka Stream等系统 也提供了类似的功能性 API
+- 基于事件时间与基于处理时间
 
 
 ## 第二十一章 结构化流处理基础
